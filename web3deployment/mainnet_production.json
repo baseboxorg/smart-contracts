@@ -287,6 +287,20 @@
     "default cap": 0,
     "wei per SGD": 850000000000000
   },
+  "3rd party wallets" :{
+    "cipher": {
+      "address": "0xDD61803d4a56C597E0fc864F7a20eC7158c6cBA5",
+      "fees": 50
+    },
+    "Trust": {
+      "address": "0xf1aa99c69715f423086008eb9d06dc1e35cc504d",
+      "fees": 50
+    },
+    "imToken": {
+      "address": "0xb9E29984Fe50602E7A619662EBED4F90D93824C7",
+      "fees": 50
+    }
+  },
   "max gas price": "50000000000",
   "neg diff in bps": 20,
   "min expected rate slippage": 300,
