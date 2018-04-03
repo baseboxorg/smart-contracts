@@ -1,15 +1,15 @@
 pragma solidity ^0.4.18;
 
 contract MockMakerDao {
-    bytes32 public weiPerDollar;
+    bytes32 public dollarPerEther; //dollar price of 1 ether * 10**18
     bool isRateValid = true;
 
     function peek() constant returns (bytes32, bool) {
-        return (weiPerDollar, isRateValid);
+        return (dollarPerEther, isRateValid);
     }
 
-    function setWeiPerDollarRate(uint _weiPerDollar) public {
-        weiPerDollar = bytes32(_weiPerDollar);
+    function setDollarsPerEtherWei(uint _dollarPerEther) public {
+        dollarPerEther = bytes32(_dollarPerEther);
     }
 
     function setIsRateValid (bool isValid) public {
