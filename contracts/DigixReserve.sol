@@ -94,7 +94,7 @@ contract DigixReserve is KyberReserveInterface, Withdrawable, Utils {
         bool isRateValid;
         bytes32 dollarsPerEtherWei; //price in dollars of 1 Ether * 10**18
         (dollarsPerEtherWei, isRateValid) = makerDaoContract.peek();
-        if (!isRateValid || uint(dollarsPerEtherWei) > MAX_RATE) return 0;
+        if (!isRateValid || (uint(dollarsPerEtherWei) > MAX_RATE) || (uint(dollarsPerEtherWei) == 0)) return 0;
 
         uint rate;
         if (ETH_TOKEN_ADDRESS == src && digix == dest) {
