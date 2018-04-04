@@ -26,7 +26,7 @@ contract DigixReserve is KyberReserveInterface, Withdrawable, Utils {
     uint public buyTransferFee = 13; //Digix token has transaction fees we should compensate for our flow to work
     uint public sellTransferFee = 13;
     mapping(bytes32=>bool) public approvedWithdrawAddresses; // sha3(token,address)=>bool
-    uint internal priceFeed;  //all price feed data squinted to one uint256
+    uint public priceFeed;  //all price feed data squinted to one uint256
     uint constant internal POW_2_64 = 2 ** 64;
 
     function DigixReserve(address _admin, address _kyberNetwork, ERC20 _digix) public {
