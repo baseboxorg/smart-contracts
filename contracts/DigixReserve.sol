@@ -42,7 +42,7 @@ contract DigixReserve is KyberReserveInterface, Withdrawable, Utils {
         tradeEnabled = true;
     }
 
-    function () public payable {}
+    function () public payable {} // solhint-disable-line no-empty-blocks
 
     /// @dev Add digix price feed. Valid for @maxBlockDrift blocks
     /// @param blockNumber the block this price feed was signed.
@@ -100,11 +100,13 @@ contract DigixReserve is KyberReserveInterface, Withdrawable, Utils {
         if (ETH_TOKEN_ADDRESS == src && digix == dest) {
             //buy digix with ether == sell ether
             if (ask1KDigix == 0) return 0;
-            // rate = 1000 * uint(dollarsPerEtherWei) * PRECISION / (etherwei == 10**18) / ask1KDigix;
+            //rate = (ether $ price / digix $ price) * precision
+            //rate = ((dollarsPerEtherWei / etherwei == 10**18) / (bid1KDigix / 1000)) * PRECISION
             rate = 1000 * uint(dollarsPerEtherWei) / ask1KDigix;
         } else if (digix == src && ETH_TOKEN_ADDRESS == dest) {
             //sell digix == buy ether with digix
-            //rate = bid1KDigix * (etherwei == 10**18) * PRECISION / uint(dollarsPerEtherWei) / 1000;
+            //rate = (digix $ price / ether $ price) * precision
+            //rate = ((bid1KDigix / 1000) / (dollarsPerEtherWei / etherwei == 10**18)) * PRECISION
             rate = bid1KDigix * PRECISION * PRECISION / uint(dollarsPerEtherWei) / 1000;
         } else {
             return 0;
