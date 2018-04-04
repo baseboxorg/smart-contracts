@@ -115,6 +115,8 @@ contract DigixReserve is KyberReserveInterface, Withdrawable, Utils {
         if (rate > MAX_RATE) return 0;
 
         uint destQty = getDestQty(src, dest, srcQty, rate);
+        if (dest == digix) destQty = recalcAmountWithFees(destQty, true);
+
         if (getBalance(dest) < destQty) return 0;
 
         return rate;
@@ -162,14 +164,16 @@ contract DigixReserve is KyberReserveInterface, Withdrawable, Utils {
         }
 
         uint destAmount = getDestQty(srcToken, destToken, srcAmount, conversionRate);
-        uint adjustedAmount;
         // sanity check
         require(destAmount > 0);
 
+        uint adjustedAmount;
+
         // collect src tokens
         if (srcToken != ETH_TOKEN_ADDRESS) {
-            //due to fee network has less tokens. take amount less fee. reduce 1 to avoid rounding errors.
-            adjustedAmount = (srcAmount * (10000 - sellTransferFee) / 10000) - 1;
+            //due to fee network has less tokens. take amount less the fee.
+            adjustedAmount = recalcAmountWithFees(srcAmount, false);
+            require(adjustedAmount > 0);
             require(srcToken.transferFrom(msg.sender, this, adjustedAmount));
         }
 
@@ -178,7 +182,7 @@ contract DigixReserve is KyberReserveInterface, Withdrawable, Utils {
             destAddress.transfer(destAmount);
         } else {
             //add 1 to compensate for rounding errors.
-            adjustedAmount = (destAmount * 10000 / (10000 - buyTransferFee)) + 1;
+            adjustedAmount = recalcAmountWithFees(destAmount, true);
             require(destToken.transfer(destAddress, adjustedAmount));
         }
 
@@ -292,5 +296,17 @@ contract DigixReserve is KyberReserveInterface, Withdrawable, Utils {
     function verifySignature(bytes32 hash, uint8 v, bytes32 r, bytes32 s) internal view returns(bool) {
         address signer = ecrecover(hash, v, r, s);
         return operators[signer];
+    }
+
+    function recalcAmountWithFees(uint amount, bool isEtherToDigix) internal view returns(uint adjustedAmount) {
+        if (isEtherToDigix) {
+            //when sending Digix to kyberNetwork fee will be reduced and received amount will be less then expected.
+            adjustedAmount = (amount * 10000 / (10000 - buyTransferFee)) + 1;
+        } else {
+            adjustedAmount = (amount * (10000 - sellTransferFee) / 10000);
+            if (adjustedAmount == 0) return 0;
+            // reduce 1 to avoid rounding errors on above calculation.
+            adjustedAmount -= 1;
+        }
     }
 }
