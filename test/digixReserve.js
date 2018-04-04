@@ -6,7 +6,6 @@ const WhiteList = artifacts.require("./WhiteList.sol");
 const ExpectedRate = artifacts.require("./ExpectedRate.sol");
 const FeeBurner = artifacts.require("./FeeBurner.sol");
 const KyberNetwork = artifacts.require("./KyberNetwork.sol");
-const EcVerify = artifacts.require("./ECVerifyContract");
 const Helper = require("./helper.js")
 const ethAddress = '0x00eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 const BigNumber = require('bignumber.js');
@@ -23,8 +22,8 @@ let admin;
 let operator;
 let user1;
 let user2;
+let alerter;
 
-const precisionPartial = new BigNumber(10).pow(15);
 const precision = new BigNumber(10).pow(18);
 const DGX_DECIMALS = new BigNumber(10).pow(9);
 const maxDriftBlocks = 200;
@@ -52,6 +51,7 @@ contract('DigixReserve', function (accounts) {
         user1 = accounts[2];
         user2 = accounts[3]
         mockKyberNetwork = accounts[4];
+        alerter = accounts[5];
 
         if ((await web3.eth.blockNumber) < 3) {
             let accountEther = 80;
@@ -74,11 +74,12 @@ contract('DigixReserve', function (accounts) {
         digixReserve = await DigixReserve.new(admin, mockKyberNetwork, digix.address);
         await digixReserve.addOperator(operator);
         await digixReserve.addOperator(signerAddress);
+        await digixReserve.addAlerter(alerter);
         await digixReserve.setMakerDaoContract(makerDao.address);
 
         // transfer tokens and ethers to digix Reserve.
         await digix.transfer(digixReserve.address, digixReserveBalanceTwei);
-        await Helper.sendEtherWithPromise(accounts[1], digixReserve.address, digixReserveBalanceWei)
+        await Helper.sendEtherWithPromise(accounts[1], digixReserve.address, digixReserveBalanceWei);
 
         //create network
         network = await KyberNetwork.new(admin);
@@ -106,8 +107,32 @@ contract('DigixReserve', function (accounts) {
         await network.listPairForReserve(digixReserve.address, digix.address, ethAddress, true);
     });
 
+    it("tests when ask 1k digix is 0, get rate returns 0.", async function (){
+        const block = await web3.eth.blockNumber;
+        let rxRate = await digixReserve.getConversionRate(ethAddress, digix.address, 5, block);
+        assert.equal(rxRate.valueOf(), 0);
+    });
+
+    it("tests get balance for reserve.", async function (){
+        let reserveWei = await digixReserve.getBalance(ethAddress);
+        assert.equal(reserveWei.valueOf(), digixReserveBalanceWei.valueOf(), "reserve balance not as expected");
+
+        let reserveTwei = await digixReserve.getBalance(digix.address);
+        let expectedBalanceTwei = (new BigNumber(digixReserveBalanceTwei)).mul(9987).div(10000);
+        assert.equal(reserveTwei.valueOf(), expectedBalanceTwei.valueOf(), "reserve balance not as expected");
+    });
+
     it("add price feed and get values - verify matching.", async function (){
         await digixReserve.setPriceFeed(signatureBlock, nonce, ask1000Digix, bid1000Digix, v, r, s);
+
+        //see set price feed reverts on nonce <= prev nonce.
+        try {
+            await digixReserve.setPriceFeed(signatureBlock, nonce, ask1000Digix, bid1000Digix, v, r, s);
+            assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
         let lastFeedValues = await digixReserve.getPriceFeed();
 //        console.log(lastFeedValues);
 
@@ -118,7 +143,7 @@ contract('DigixReserve', function (accounts) {
     });
 
     it("get conversion rate ether to digix and verify correct.", async function (){
-        let block = await web3.eth.blockNumber;
+        const block = await web3.eth.blockNumber;
         let srcQty = 100; //has no affect in digix get rate
 
         //calculate expected rate ether to digix == ether dollar price / digix dollar price
@@ -129,13 +154,13 @@ contract('DigixReserve', function (accounts) {
 
         let rxRate = await digixReserve.getConversionRate(ethAddress, digix.address, srcQty, block);
         rxRate = new BigNumber(rxRate.valueOf());
-        rxRate = (rxRate.div(precisionPartial)).valueOf() / 1000;
+        rxRate = (rxRate.div(precision)).valueOf() / 1;
 
         assert.equal(rxRate.toFixed(9), expectedRate.toFixed(9), "bad conversion rate");
     })
 
     it("get conversion rate digix to ether and verify correct.", async function (){
-        let block = await web3.eth.blockNumber;
+        const block = await web3.eth.blockNumber;
         let srcQty = 100; //has no affect in digix get rate
 
         //calculate expected rate digix to ether == digix dollar price / ether dollar price
@@ -145,13 +170,13 @@ contract('DigixReserve', function (accounts) {
 
         let rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, srcQty, block);
         rxRate = new BigNumber(rxRate.valueOf());
-        rxRate = (rxRate.div(precisionPartial)).valueOf() / 1000;
+        rxRate = (rxRate.div(precision)).valueOf() / 1;
 
         assert.equal(rxRate.toFixed(9), expectedRate.toFixed(9), "bad conversion rate");
     })
 
-    it("buy digix. (ether to digix)", async function (){
-        let block = await web3.eth.blockNumber;
+    it("trade ether to digix. buy digix.", async function (){
+        const block = await web3.eth.blockNumber;
         let srcQtyWei = 1000000000000;
 
         let rxRate = await digixReserve.getConversionRate(ethAddress, digix.address, srcQtyWei, block);
@@ -169,45 +194,42 @@ contract('DigixReserve', function (accounts) {
         expectedDstQty = expectedDstQty.mul(9987).div(10000);
         expectedDstQty = expectedDstQty.add(1).floor()
 
-//        trade(ERC20 srcToken, uint srcAmount, ERC20 destToken, address destAddress, uint conversionRate, bool validate)
+//      api: trade(ERC20 srcToken, uint srcAmount, ERC20 destToken, address destAddress, uint conversionRate, bool validate)
 
         await digixReserve.trade(ethAddress, srcQtyWei, digix.address, user2, rxRate, false, {from: mockKyberNetwork, value: srcQtyWei});
         let user2Balance = await digix.balanceOf(user2);
         assert.equal(user2Balance.valueOf(), expectedDstQty.valueOf(), "wrong balance user2");
     })
 
-    it("sell back digix", async function (){
-        let block = await web3.eth.blockNumber;
+    it("trade digix to ether", async function (){
+        const block = await web3.eth.blockNumber;
         let srcQtyDigixTwei = await digix.balanceOf(user2);
         let digixApproveValue = 2 * srcQtyDigixTwei.valueOf();
 
         let rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, srcQtyDigixTwei.valueOf(), block);
         let rate = new BigNumber(rxRate.valueOf());
-
         //calculate expected dest qty
         //here dstDecimals > src decimals
         //dstQty = (srcQty * rate * (10**(dstDecimals - srcDecimals))) / PRECISION;
+        let expectedDstQty = (rate.mul(srcQtyDigixTwei).mul((new BigNumber(10)).pow(9))).div(precision);
+        expectedDstQty = expectedDstQty.floor();
 
-        let dstQty = rate.mul(srcQtyDigixTwei).mul((new BigNumber(10)).pow(18-9)).div(precision);
-        dstQty = dstQty.floor();
-        console.log('dstQty.valueOf()')
-        console.log(dstQty.valueOf())
-
-//        trade(ERC20 srcToken, uint srcAmount, ERC20 destToken, address destAddress, uint conversionRate, bool validate)
-
-        let user2StartBalanceWei = await Helper.getBalancePromise(user2);
+        let user2StartBalanceWei = new BigNumber(await Helper.getBalancePromise(user2));
 
         digix.transfer(mockKyberNetwork, digixApproveValue);
         digix.approve(digixReserve.address, digixApproveValue, {from: mockKyberNetwork});
 
-        await digixReserve.trade(digix.address, srcQtyDigixTwei, ethAddress, user2, rxRate, false, {from: mockKyberNetwork});
-        let user2BalanceWei = await Helper.getBalancePromise(user2);
-        let actualWeiQty = user2BalanceWei - user2StartBalanceWei;
-        assert.equal(actualWeiQty, dstQty.valueOf(), "wrong balance user2")
+
+//      API:  trade(ERC20 srcToken, uint srcAmount, ERC20 destToken, address destAddress, uint conversionRate, bool validate)
+        await digixReserve.trade(digix.address, srcQtyDigixTwei, ethAddress, user2, rate, true, {from: mockKyberNetwork});
+
+        let user2BalanceWei = new BigNumber(await Helper.getBalancePromise(user2));
+        let actualWeiQty = user2BalanceWei.sub(user2StartBalanceWei);
+        assert.equal(actualWeiQty.valueOf(), expectedDstQty.valueOf(), "wrong balance user2")
     });
 
     it("get from reserve conversion rate ether to digix. compare to network result.", async function (){
-        let block = await web3.eth.blockNumber;
+        const block = await web3.eth.blockNumber;
         let srcQty = 100; //has no affect in digix get rate
 
         let reserveRate = await digixReserve.getConversionRate(ethAddress, digix.address, srcQty, block);
@@ -218,7 +240,7 @@ contract('DigixReserve', function (accounts) {
     })
 
     it("get from reserve conversion rate digix to ether. compare to network result.", async function (){
-        let block = await web3.eth.blockNumber;
+        const block = await web3.eth.blockNumber;
         let srcQty = 100; //has no affect in digix get rate
 
         let reserveRate = await digixReserve.getConversionRate(digix.address, ethAddress, srcQty, block);
@@ -228,9 +250,7 @@ contract('DigixReserve', function (accounts) {
         assert.equal(reserveRate.valueOf(), networkRate[1].valueOf(), "reserve rate and network rate don't match")
     })
 
-
-    it("buy digix. (ether to digix). use network", async function (){
-        let block = await web3.eth.blockNumber;
+    it("trade ether to digix. (buy digix). use network", async function (){
         let srcQtyWei = 10000000000;
 
         let rxRate = await network.findBestRate(ethAddress, digix.address, srcQtyWei);
@@ -253,22 +273,398 @@ contract('DigixReserve', function (accounts) {
         expectedDstQty = expectedDstQty.mul(9987).div(10000);
         expectedDstQty = expectedDstQty.add(1).floor();
 
-        //trade(ERC20 src, uint srcAmount, ERC20 dest, destAddress, maxDestAmount, uint minConversionRate, address walletId
-        let maxDestAmount = 1000000;
+        let maxDestAmount = 2 * expectedDstQty;
         let user2StartBalance = await digix.balanceOf(user2);
 
         // set real network in digixReserve
         await digixReserve.setKyberNetworkAddress(network.address);
 
+        //API: trade(ERC20 src, uint srcAmount, ERC20 dest, destAddress, maxDestAmount, uint minConversionRate, address walletId
         await network.trade(ethAddress, srcQtyWei, digix.address, user2, maxDestAmount, rxRate - 10, 0, {from:user1, value: srcQtyWei});
         let user2Balance = await digix.balanceOf(user2);
         let recievedDigix = user2Balance - user2StartBalance;
         assert.equal(recievedDigix.valueOf(), expectedDstQty.valueOf(), "wrong balance user2");
     })
 
-          //digix has 0.13% fees. the internal transaction reserve to user looses those fees.
-//            expectedDstQty = expectedDstQty.mul(9987).div(10000);
+    it("trade digix to ether. (sell digix). use network", async function (){
+        let srcQtyDigixTwei = await digix.balanceOf(user2);
+        let digixApproveValue = 2 * srcQtyDigixTwei.valueOf();
 
+        let rxRate = await network.findBestRate(digix.address, ethAddress, srcQtyDigixTwei);
+        let rate = new BigNumber(rxRate[1].valueOf());
+
+        //calculate expected dest qty
+        //here dstDecimals > src decimals
+        //dstQty = (srcQty * rate * (10**(dstDecimals - srcDecimals))) / PRECISION;
+        let expectedDstQty = (rate.mul(srcQtyDigixTwei).mul((new BigNumber(10)).pow(9))).div(precision);
+        expectedDstQty = expectedDstQty.floor();
+
+        let user2StartBalanceWei = new BigNumber(await Helper.getBalancePromise(user2));
+
+        digix.transfer(user1, digixApproveValue);
+        digix.approve(network.address, digixApproveValue, {from: user1});
+        let maxDestAmount = 2 * expectedDstQty;
+
+        //API: trade(ERC20 src, uint srcAmount, ERC20 dest, destAddress, maxDestAmount, uint minConversionRate, address walletId
+        await network.trade(digix.address, srcQtyDigixTwei, ethAddress, user2, maxDestAmount, rxRate - 10, 0, {from:user1});
+        let user2BalanceWei = new BigNumber(await Helper.getBalancePromise(user2));
+        let actualWeiQty = user2BalanceWei.sub(user2StartBalanceWei);
+        assert.equal(actualWeiQty.valueOf(), expectedDstQty.valueOf(), "wrong balance user2")
+    })
+
+    it("verify set kyber network possible only with admin account", async function (){
+        try {
+             await digixReserve.setKyberNetworkAddress(mockKyberNetwork, {from: operator});
+             assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+        let kyberNetwork = await digixReserve.kyberNetwork();
+        assert(kyberNetwork.valueOf() != mockKyberNetwork);
+        await digixReserve.setKyberNetworkAddress(mockKyberNetwork, {from: admin});
+        kyberNetwork = await digixReserve.kyberNetwork();
+        assert(kyberNetwork.valueOf() == mockKyberNetwork);
+    })
+
+    it("verify set maker dao contract address possible only with admin account", async function (){
+        try {
+             await digixReserve.setMakerDaoContract(mockKyberNetwork, {from: operator});
+             assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+        let maker = await digixReserve.makerDaoContract();
+        assert(maker.valueOf() != mockKyberNetwork);
+        await digixReserve.setMakerDaoContract(mockKyberNetwork, {from: admin});
+        maker = await digixReserve.makerDaoContract();
+        assert(maker.valueOf() == mockKyberNetwork);
+        //set back correct makder DAO
+        await digixReserve.setMakerDaoContract(makerDao.address, {from: admin});
+    })
+
+    it("approve withdraw address and withdraw funds. ether and digix", async function (){
+        await digixReserve.approveWithdrawAddress(ethAddress, user2, true, {from: admin});
+        await digixReserve.approveWithdrawAddress(digix.address, user2, true, {from: admin});
+
+        //withdraw ether.
+        let weiSendAmount = 10;
+        let user2StartBalanceWei = new BigNumber(await Helper.getBalancePromise(user2));
+        await digixReserve.withdraw(ethAddress, weiSendAmount, user2, {from: operator});
+        let user2BalanceWei = new BigNumber(await Helper.getBalancePromise(user2));
+        let balanceDiff = user2BalanceWei.sub(user2StartBalanceWei);
+        assert.equal(balanceDiff.valueOf(), weiSendAmount);
+
+        //withdraw ether.
+        let tweiSendAmount = 10;
+        let user2StartBalanceTwei = new BigNumber(await digix.balanceOf(user2));
+        await digixReserve.withdraw(digix.address, weiSendAmount, user2, {from: operator});
+        let user2BalanceTwei = new BigNumber(await digix.balanceOf(user2));
+        balanceDiff = user2BalanceTwei.sub(user2StartBalanceTwei);
+        let amountMinusFee = (new BigNumber(tweiSendAmount)).mul(9987).div(10000).floor();
+        assert.equal(balanceDiff.valueOf(), amountMinusFee.valueOf());
+    })
+
+    it("verify approve withdraw funds only by admin and withdraw only by operator", async function (){
+        let amount = 10;
+        let reserveStartBalanceTwei = await digix.balanceOf(digixReserve.address);
+        let reserveStartBalanceWei = await Helper.getBalancePromise(digixReserve.address);
+
+        try {
+            await digixReserve.approveWithdrawAddress(ethAddress, user1, true, {from: user1});
+            assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
+        //see can't withdraw ether to user1.
+        try {
+            await digixReserve.withdraw(ethAddress, amount, user1, {from: operator});
+            assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
+        //see can't withdraw ether to user2 by address different then operator
+        try {
+            await digixReserve.withdraw(ethAddress, amount, user2, {from: user2});
+            assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
+        let reserveBalanceTwei = await digix.balanceOf(digixReserve.address);
+        let reserveBalanceWei = await Helper.getBalancePromise(digixReserve.address);
+        assert.equal(reserveBalanceTwei.valueOf(), reserveStartBalanceTwei.valueOf());
+        assert.equal(reserveBalanceWei.valueOf(), reserveStartBalanceWei.valueOf());
+    })
+
+    it("verify set price feed reverts for block number > current block number", async function (){
+        const blockT = 700000;
+        const nonceT = 256660;
+        const askT = 48100;
+        const bidT = 50115;
+        const vT = 0x1c;
+        const rT = new BigNumber('0x0fc3dfb2f04de2cc9813890192bbe018a462e9b0fc8656527a2e1b549b341441');
+        const sT = new BigNumber('0x23b9c9b2f16adff5e71796809a8183a82c84b86f4295d6f32d0efbbec3f85e14');
+
+        try {
+             await digixReserve.setPriceFeed(blockT, nonceT, askT, bidT, vT, rT, sT);
+             assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
+        //see values haven't changed
+        let lastFeedValues = await digixReserve.getPriceFeed();
+
+        assert.equal(lastFeedValues[0].valueOf(), signatureBlock);
+        assert.equal(lastFeedValues[1].valueOf(), nonce);
+        assert.equal(lastFeedValues[2].valueOf(), ask1000Digix);
+        assert.equal(lastFeedValues[3].valueOf(), bid1000Digix);
+    })
+
+    it("verify set price feed reverts when block number + blockdrift <= current block number", async function (){
+        const blockT = 1;
+        const nonceT = 256660;
+        const askT = 48100;
+        const bidT = 50115;
+        const vT = 0x1b;
+        const rT = new BigNumber('0xc3112880686177d8586cb0133ebbed8d73f6f756e432760ddc2c3390408e9fbb');
+        const sT = new BigNumber('0x0c82007ad6107ea6ddd6fefdb9942bbe1a0082036fdc6fbc3716ebe926e535be');
+
+        // for this test should set low block drift value
+        await digixReserve.setMaxBlockDrift(2, {from: admin});
+
+        try {
+             await digixReserve.setPriceFeed(blockT, nonceT, askT, bidT, vT, rT, sT);
+             assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
+        //see values haven't changed
+        let lastFeedValues = await digixReserve.getPriceFeed();
+
+        assert.equal(lastFeedValues[0].valueOf(), signatureBlock);
+        assert.equal(lastFeedValues[1].valueOf(), nonce);
+        assert.equal(lastFeedValues[2].valueOf(), ask1000Digix);
+        assert.equal(lastFeedValues[3].valueOf(), bid1000Digix);
+
+
+        //set back block drift
+        await digixReserve.setMaxBlockDrift(700, {from: admin});
+    })
+
+    it("verify set price feed reverts when signature doesn't match", async function (){
+        try {
+             await digixReserve.setPriceFeed(signatureBlock, (nonce + 1 * 1), ask1000Digix, bid1000Digix, v, r, s);
+             assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+    })
+
+
+    it("verify only alerter can disable trade and only admin can enable trade", async function (){
+        let tradeEnabled = await digixReserve.tradeEnabled();
+        assert.equal(tradeEnabled, true);
+
+        try {
+             await digixReserve.disableTrade({from: operator});
+             assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
+        tradeEnabled = await digixReserve.tradeEnabled();
+        assert.equal(tradeEnabled, true);
+
+        //now disable and verify
+        await digixReserve.disableTrade({from: alerter});
+        tradeEnabled = await digixReserve.tradeEnabled();
+        assert.equal(tradeEnabled, false);
+
+        //see enable fails with operator
+        try {
+             await digixReserve.enableTrade({from: operator});
+             assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+        tradeEnabled = await digixReserve.tradeEnabled();
+        assert.equal(tradeEnabled, false);
+
+        await digixReserve.enableTrade({from: admin});
+        tradeEnabled = await digixReserve.tradeEnabled();
+        assert.equal(tradeEnabled, true);
+    })
+
+    it("disable trade and verify 'get rate' is 0 and 'trade' reverted", async function (){
+        let qty = 5;
+        const block = await web3.eth.blockNumber;
+        let goodRate = await digixReserve.getConversionRate(digix.address, ethAddress, qty, block);
+
+        await digixReserve.disableTrade({from: alerter});
+
+        let rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, qty, block);
+        assert.equal(rxRate.valueOf(), 0);
+
+        try {
+            await digixReserve.trade(digix.address, qty, ethAddress, user2, goodRate.valueOf(), true, {from: mockKyberNetwork});
+            assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
+        await digixReserve.enableTrade({from: admin});
+    });
+
+    it("tests set sell fee..", async function (){
+        let newSellFee = 300;
+        let normalSellFee = 13;
+        await digixReserve.setSellFeeBps(newSellFee);
+        let rxFee = await digixReserve.sellTransferFee();
+        assert.equal(newSellFee, rxFee.valueOf());
+
+        //make sure can't set above 9999
+        let maxSellFee = 9999;
+        await digixReserve.setSellFeeBps(maxSellFee);
+        rxFee = await digixReserve.sellTransferFee();
+        assert.equal(maxSellFee, rxFee.valueOf());
+
+        try {
+            await digixReserve.setSellFeeBps(maxSellFee * 1 + 1 * 1);
+            assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
+        rxFee = await digixReserve.sellTransferFee();
+        assert.equal(maxSellFee, rxFee.valueOf());
+
+        //set back to normal
+        await digixReserve.setSellFeeBps(normalSellFee);
+        rxFee = await digixReserve.sellTransferFee();
+        assert.equal(normalSellFee, rxFee.valueOf());
+    });
+
+    it("tests set buy fee..", async function (){
+        let newBuyFee = 300;
+        let normalBuyFee = 13;
+        await digixReserve.setBuyFeeBps(newBuyFee);
+        let rxFee = await digixReserve.buyTransferFee();
+        assert.equal(newBuyFee, rxFee.valueOf());
+
+        //make sure can't set above 9999
+        let maxBuyFee = 9999;
+        await digixReserve.setBuyFeeBps(maxBuyFee);
+        rxFee = await digixReserve.buyTransferFee();
+        assert.equal(maxBuyFee, rxFee.valueOf());
+
+        try {
+            await digixReserve.setBuyFeeBps(maxBuyFee * 1 + 1 * 1);
+            assert(false, "throw was expected in line above.")
+        } catch(e){
+            assert(Helper.isRevertErrorMessage(e), "expected throw but got: " + e);
+        }
+
+        rxFee = await digixReserve.buyTransferFee();
+        assert.equal(maxBuyFee, rxFee.valueOf());
+
+        //set back to normal
+        await digixReserve.setBuyFeeBps(normalBuyFee);
+        rxFee = await digixReserve.buyTransferFee();
+        assert.equal(normalBuyFee, rxFee.valueOf());
+    });
+
+    it("set low block drift. make sure rate returns 0 .", async function (){
+        const block = await web3.eth.blockNumber;
+        await digixReserve.setMaxBlockDrift(2, {from: admin});
+
+        let rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        assert.equal(rxRate.valueOf(), 0, "rate should be zero");
+
+        //now set high block drift and see rate is ok
+        await digixReserve.setMaxBlockDrift(700, {from: admin});
+
+        rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        assert(rxRate.valueOf() > 0, "rate should be above zero");
+    });
+
+    it("set maker dao to return non valid rate flag. see our get rate returns 0", async function (){
+        const block = await web3.eth.blockNumber;         
+        await makerDao.setIsRateValid(false);
+
+        let rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        assert.equal(rxRate.valueOf(), 0, "rate should be zero");
+
+        await makerDao.setIsRateValid(true);
+
+        rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        assert(rxRate.valueOf() > 0, "rate should be above zero");
+    })
+
+    it("set maker dao to return rate > max rate. see our get rate returns 0", async function (){
+        const block = await web3.eth.blockNumber;
+        //
+        const maxRate = (new BigNumber(10)).pow(24).add(1);
+        await makerDao.setDollarsPerEtherWei(maxRate);
+
+        let rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        assert.equal(rxRate.valueOf(), 0, "rate should be zero");
+
+        await makerDao.setDollarsPerEtherWei(dollarsPerEtherWei);
+
+        rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        assert(rxRate.valueOf() > 0, "rate should be above zero");
+    })
+
+    it("get rate for pair not digix && ether. see returns 0", async function (){
+        const block = await web3.eth.blockNumber;
+
+        let rxRate = await digixReserve.getConversionRate(ethAddress, ethAddress, 5, block);
+        assert.equal(rxRate.valueOf(), 0, "rate should be zero");
+
+        rxRate = await digixReserve.getConversionRate(digix.address, digix.address, 5, block);
+        assert.equal(rxRate.valueOf(), 0, "rate should be zero");
+
+        rxRate = await digixReserve.getConversionRate(ethAddress, user2, 5, block);
+        assert.equal(rxRate.valueOf(), 0, "rate should be zero");
+
+        rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        assert(rxRate.valueOf() > 0, "rate should be above zero");
+    })
+
+
+    it("set maker dao to return high rate so this * 1000 will cause > max rate. see our get rate returns 0", async function (){
+        const block = await web3.eth.blockNumber;
+        //
+        const highRate = (new BigNumber(10)).pow(23);
+        await makerDao.setDollarsPerEtherWei(highRate);
+
+        //need to set low ask per 1K digix
+        const blockT = 9;
+        const nonceT = 256690;
+        const askT = 20;
+        const bidT = 15;
+        const vT = 0x1c;
+        const rT = new BigNumber('0x0e1603beab2166e4a1d7d8d522b3884903bf0848fa91ca84943b60c89ad52237');
+        const sT = new BigNumber('0x6a030e26b68814d4f903ad64fd94269d6bc185e876c3915f008b01f0c0e2b71d');
+
+        await digixReserve.setPriceFeed(blockT, nonceT, askT, bidT, vT, rT, sT);
+
+        let rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        assert.equal(rxRate.valueOf(), 0, "rate should be zero");
+
+        await makerDao.setDollarsPerEtherWei(dollarsPerEtherWei);
+
+        rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        assert(rxRate.valueOf() > 0, "rate should be above zero");
+    })
+
+    it("test for overflow with high bid / ask values", async function (){
+
+    })
 
 });
 
