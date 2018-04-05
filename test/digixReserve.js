@@ -786,29 +786,21 @@ contract('DigixReserve', function (accounts) {
     it("set maker dao to return high rate so this * 1000 will cause > max rate. see our get rate returns 0", async function (){
         const block = await web3.eth.blockNumber;
         //
-        const highRate = (new BigNumber(10)).pow(23);
+        const highRate = ((new BigNumber(10)).pow(24)).sub(1000);
         await makerDao.setDollarsPerEtherWei(highRate);
 
         //need to set low ask per 1K digix
         const blockT = 9;
-        const nonceT = 256690;
+        const nonceT = 256700;
         const askT = 20;
         const bidT = 15;
-        const vT = 0x1c;
-        const rT = new BigNumber('0x0e1603beab2166e4a1d7d8d522b3884903bf0848fa91ca84943b60c89ad52237');
-        const sT = new BigNumber('0x6a030e26b68814d4f903ad64fd94269d6bc185e876c3915f008b01f0c0e2b71d');
-
-        let lastFeedValues = await digixReserve.getPriceFeed();
-//        console.log(lastFeedValues);
-
-        console.log("block  " + lastFeedValues[0].valueOf())
-        console.log("nonde  " + lastFeedValues[1].valueOf())
-        console.log( "ask1K   " + lastFeedValues[2].valueOf())
-        console.log("bid 1 K  " + lastFeedValues[3].valueOf())
+        const vT = 0x1b;
+        const rT = new BigNumber('0xf26e87e61f98bf1d6678c3ed6e77edbaae7c9e50aaf10fb65eb67c18cbd730e6');
+        const sT = new BigNumber('0x261941c287382c4a86b3a3789fffc779e362c619408787ce94c994c29c1e13f8');
 
         await digixReserve.setPriceFeed(blockT, nonceT, askT, bidT, vT, rT, sT);
 
-        let rxRate = await digixReserve.getConversionRate(digix.address, ethAddress, 5, block);
+        let rxRate = await digixReserve.getConversionRate(ethAddress, digix.address, 5, block);
         assert.equal(rxRate.valueOf(), 0, "rate should be zero");
 
         await makerDao.setDollarsPerEtherWei(dollarsPerEtherWei);
