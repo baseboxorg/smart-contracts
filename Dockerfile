@@ -1,21 +1,16 @@
-FROM ubuntu:14.04.5
+FROM node:8-alpine
 
-RUN apt-get update && \
-        apt-get install -y \
-        software-properties-common \
-        g++ \
-        build-essential \
-        curl \
-        git \
-        file \
-        binutils \
-        libssl-dev \
-        pkg-config \
-        libudev-dev \
-        openssl
-
-RUN curl -sL https://deb.nodesource.com/setup_8.x | sudo -E bash -
-RUN apt-get install -y nodejs
+RUN apk add --no-cache \
+      build-base \
+      openssl-dev \
+      curl \
+      g++ \
+      git \
+      file \
+      binutils \
+      libssl1.0 \
+      pkgconfig \
+      openssl
 
 ADD . /smart-contracts
 
